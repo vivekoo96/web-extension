@@ -1,213 +1,176 @@
-const yourTripPalUrls = 'https://yourtrippal.com'
-const logoUrl = chrome.runtime.getURL('icons/logo.png')
-const apiUrl = 'https://dev.yourtrippal.com/api/extension/coupon'
+const yourTripPalUrls = 'https://yourtrippal.com';
+const apiUrl = 'https://dev.yourtrippal.com/api/extension/coupon';
 
-// Function to extract defaultSearch from a script tag
-function extractDefaultSearch() {
-  const scriptTags = document.querySelectorAll('script')
-  for (const script of scriptTags) {
-    const textContent = script.textContent || ''
-    if (textContent.includes('defaultSearch')) {
-      // Extract the JSON-like string from the script content
-      const match = textContent.match(/defaultSearch\s*=\s*('.*?');/)
-      if (match && match[1]) {
-        return match[1].replace(/'/g, '"')
-      }
+// Function to send POST request and get data
+async function sendPostRequest(url, variable) {
+  try {
+    const formData = new FormData();
+    formData.append('url', url);
+    formData.append('variable', variable);
+
+    const response = await fetch('https://dev.yourtrippal.com/api/fetch-variable', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error(`Network response was not ok. Status: ${response.status}`);
     }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error:', error);
   }
-  return null
 }
 
-// Function to get pass amounts
-function getPassAmounts() {
-  console.log('Script Loaded')
+// Function to get booking details from the URL
+function getBookingDetails() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const origin = urlParams.get('origin');
+  const destination = urlParams.get('destination');
+  const departureDate = urlParams.get('departure_date');
+  return { origin, destination, departureDate };
+}
 
-  const dataString = extractDefaultSearch()
-  console.log('Data String:', dataString)
-
-  if (!dataString) {
-    console.error('defaultSearch is not available.')
-    return
-  }
-
+// Function to fetch coupon data from API
+async function fetchData() {
   try {
-    // Parse the JSON string
-    const data = JSON.parse(dataString)
-    console.log('Parsed Data:', data)
+    const response = await fetch(apiUrl);
+    if (!response.ok) {
+      throw new Error('Network response was not ok');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Failed to fetch data:', error);
+    return null;
+  }
+}
 
-    if (
-      typeof data === 'object' &&
-      data.searchedRouteList &&
-      Array.isArray(data.searchedRouteList.list)
-    ) {
-      const passAmounts = data.searchedRouteList.list.map(
-        (route) => route.pass_amount
-      )
-      console.log('Pass Amounts:', passAmounts)
+// Function to find minimum pass amount from the bus list
+async function processData() {
+  try {
+    const url = window.location.href;
+    const variable = 'defaultSearch';
+    const data = await sendPostRequest(url, variable);
 
-      // Send the pass amounts to the background script
-      chrome.runtime.sendMessage({
-        action: 'passAmountData',
-        passAmounts: passAmounts,
-      })
+    if (data && data.defaultSearch && data.defaultSearch.searchedRouteList && data.defaultSearch.searchedRouteList.list) {
+      const busList = data.defaultSearch.searchedRouteList.list;
+
+      // Assuming we take the first item if there's a list
+      const minBusPrice = busList.reduce((min, bus) => bus.pass_amount < min ? bus.pass_amount : min, Infinity);
+      return { price: minBusPrice };
     } else {
-      console.error('Data structure is not available or invalid.')
+      console.log('No data available or data structure is different');
+      return null;
     }
   } catch (error) {
-    console.error('Error parsing JSON:', error)
+    console.error('Failed to fetch data:', error);
   }
-}
-
-// Ensure the function runs when the DOM is fully loaded
-document.addEventListener('DOMContentLoaded', () => {
-  getPassAmounts()
-})
-
-function fetchYourTripPalPrices(bookingDetails) {
-  const yourTripPalApiUrl =
-    'https://dev.yourtrippal.com/api/extension/getPrices'
-  return fetch(
-    `${yourTripPalApiUrl}?origin=${bookingDetails.origin}&destination=${bookingDetails.destination}&date=${bookingDetails.departureDate}`
-  )
-    .then((response) => response.json())
-    .then((data) => data.prices)
-    .catch((error) => {
-      console.error('Error fetching YourTripPal prices:', error)
-      return []
-    })
 }
 
 // Function to compare prices
-function comparePrices(ourBusPrices, yourTripPalPrices) {
-  let result = []
-  ourBusPrices.forEach((bus) => {
-    const yourTripPalPrice = yourTripPalPrices.find(
-      (price) => price.busId === bus.busId
-    )
-    if (yourTripPalPrice) {
-      result.push({ ...bus, yourTripPalPrice: yourTripPalPrice.price })
-    }
-  })
-  return result
+function comparePrices(ourBusPrice, yourTripPalPrice) {
+  return {
+    ourBusPrice: ourBusPrice.price,
+    yourTripPalPrice: yourTripPalPrice.price
+  };
+}
+
+// Function to fetch YourTripPal prices
+function fetchYourTripPalPrices(bookingDetails) {
+  const yourTripPalApiUrl = 'https://dev.yourtrippal.com/api/extension/getPrices';
+  return fetch(
+      `${yourTripPalApiUrl}?origin=${bookingDetails.origin}&destination=${bookingDetails.destination}&date=${bookingDetails.departureDate}`
+  )
+      .then(response => response.json())
+      .then(data => data.prices) // Assume you get one price object
+      .catch(error => {
+        console.error('Error fetching YourTripPal prices:', error);
+        return null;
+      });
 }
 
 // Function to show the popup
 function showPopup(comparisonResults, couponCode) {
-  // Create the container for the popup
-  const popupDiv = document.createElement('div')
-  popupDiv.style.position = 'fixed'
-  popupDiv.style.top = '10px'
-  popupDiv.style.right = '10px'
-  popupDiv.style.width = '300px'
-  popupDiv.style.height = '500px'
-  popupDiv.style.border = '1px solid #ccc'
-  popupDiv.style.zIndex = '10000'
-  popupDiv.style.backgroundColor = '#ffffff'
-  popupDiv.style.padding = '15px'
-  popupDiv.style.fontFamily = 'Arial, sans-serif'
-  popupDiv.style.textAlign = 'center'
-  popupDiv.style.borderRadius = '10px'
-  popupDiv.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)'
-  popupDiv.style.overflow = 'auto'
-  popupDiv.style.boxSizing = 'border-box'
+  const popupDiv = document.createElement('div');
+  popupDiv.style.position = 'fixed';
+  popupDiv.style.top = '10px';
+  popupDiv.style.right = '10px';
+  popupDiv.style.width = '300px';
+  popupDiv.style.height = '500px';
+  popupDiv.style.border = '1px solid #ccc';
+  popupDiv.style.zIndex = '10000';
+  popupDiv.style.backgroundColor = '#ffffff';
+  popupDiv.style.padding = '15px';
+  popupDiv.style.fontFamily = 'Arial, sans-serif';
+  popupDiv.style.textAlign = 'center';
+  popupDiv.style.borderRadius = '10px';
+  popupDiv.style.boxShadow = '0 4px 8px rgba(0, 0, 0, 0.2)';
+  popupDiv.style.overflow = 'auto';
+  popupDiv.style.boxSizing = 'border-box';
 
-  // Create the logo
-  const logo = document.createElement('img')
-  logo.src = 'https://www.yourtrippal.com/images/yourtrippal%20LOGO..-01@2x.png'
-  logo.alt = 'YourTripPal Logo'
-  logo.style.width = '100px'
-  logo.style.margin = '15px 0'
+  const logo = document.createElement('img');
+  logo.src = 'https://www.yourtrippal.com/images/yourtrippal%20LOGO..-01@2x.png';
+  logo.alt = 'YourTripPal Logo';
+  logo.style.width = '100px';
+  logo.style.margin = '15px 0';
 
-  // Create the coupon code container
-  const couponContainer = document.createElement('div')
+  const couponContainer = document.createElement('div');
   couponContainer.style.background =
-    'linear-gradient(to top, #FF7F00 0%, #011950 70%, #011950 100%)'
-  couponContainer.style.borderRadius = '10px'
-  couponContainer.style.color = 'white'
-  couponContainer.style.padding = '15px'
+      'linear-gradient(to top, #FF7F00 0%, #011950 70%, #011950 100%)';
+  couponContainer.style.borderRadius = '10px';
+  couponContainer.style.color = 'white';
+  couponContainer.style.padding = '15px';
   couponContainer.innerHTML = `
-      <h5>To get the cheapest price on YourTripPal, use Coupon Code "<span style="text-decoration: underline;">${couponCode}</span>" on YourTripPal!</h5>
-      <a href="${yourTripPalUrls}?coupon=${couponCode}" target="_blank" class="text-dark fw-semibold w-100 rounded" style="background:orange; font-size: 18px; text-decoration:none; padding:7px 15px; color:white; display:inline-block; margin: 10px 0;">${couponCode}</a>
-    `
+    <h5>To get the cheapest price on YourTripPal, use Coupon Code "<span style="text-decoration: underline;">${couponCode}</span>" on YourTripPal!</h5>
+    <a href="${yourTripPalUrls}?coupon=${couponCode}" target="_blank" class="text-dark fw-semibold w-100 rounded" style="background:orange; font-size: 18px; text-decoration:none; padding:7px 15px; color:white; display:inline-block; margin: 10px 0;">${couponCode}</a>
+  `;
 
-  // Create the comparison container
-  const comparisonContainer = document.createElement('div')
-  comparisonContainer.className = 'container'
-  let comparisonHTML =
-    '<h5 class="text-warning">Price Comparison</h5><div style="display: flex; flex-wrap: wrap;">'
-
-  comparisonResults.forEach((result) => {
-    comparisonHTML += `
-      <div style="flex: 1 1 100%; padding: 5px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 7px; box-sizing: border-box;">
-        ${result.src} to ${result.dest} (${result.departureDate})
+  const comparisonContainer = document.createElement('div');
+  comparisonContainer.className = 'container';
+  comparisonContainer.innerHTML = `
+    <h5 class="text-warning">Price Comparison with YourTrippal</h5>
+    <div style="display: flex; flex-wrap: wrap;">
+     <div style="flex: 1 1 100%; padding: 5px; background: #343a40; color: white; margin-bottom: 4px; border: 1px solid #dee2e6; border-radius: 7px; box-sizing: border-box;">
+        YourTripPal Price: $${comparisonResults.yourTripPalPrice.toFixed(2)}
       </div>
-      <div style="flex: 1 1 100%; padding: 5px; background: #343a40; color: white; border: 1px solid #dee2e6; border-radius: 7px; box-sizing: border-box;">
-        OurBus: $${result.price.toFixed(
-          2
-        )} vs. YourTripPal: $${result.yourTripPalPrice.toFixed(2)}
+      <div style="flex: 1 1 100%; padding: 5px; background: #f8f9fa; border: 1px solid #dee2e6; margin-bottom: 4px; border-radius: 7px; box-sizing: border-box;">
+        OurBus Price: $${comparisonResults.ourBusPrice.toFixed(2)}
       </div>
-    `
-  })
-
-  comparisonHTML += `
-      <div style="flex: 1 1 100%; padding: 10px; margin-top:10px; background: #011950; color: white; border-radius: 5px; box-sizing: border-box;">
+     
+      <div style="flex: 1 1 100%; padding: 10px; margin-top:10px; background: orange; color: white; border-radius: 5px; box-sizing: border-box;">
         <a href="${yourTripPalUrls}?coupon=${couponCode}" target="_blank" style="color: white; text-decoration: none;">Book with YourTripPal</a>
       </div>
-    </div>`
+    </div>
+  `;
 
-  comparisonContainer.innerHTML = comparisonHTML
+  popupDiv.appendChild(logo);
+  popupDiv.appendChild(couponContainer);
+  popupDiv.appendChild(comparisonContainer);
 
-  // Append elements to the popup div
-  popupDiv.appendChild(logo)
-  popupDiv.appendChild(couponContainer)
-  popupDiv.appendChild(comparisonContainer)
-
-  // Append the popup div to the body
-  document.body.appendChild(popupDiv)
+  document.body.appendChild(popupDiv);
 }
 
-// Get booking details from the URL
-function getBookingDetails() {
-  const urlParams = new URLSearchParams(window.location.search)
-  const origin = urlParams.get('origin')
-  const destination = urlParams.get('destination')
-  const departureDate = urlParams.get('departure_date')
-  console.log(origin, destination, departureDate)
+// Main function to fetch data and create the popup
+(async () => {
+  try {
+    const bookingDetails = getBookingDetails();
+    const ourBusPrice = await processData();
+    const couponData = await fetchData();
 
-  return { origin, destination, departureDate }
-}
-
-// Fetch data and create the popup
-fetchData().then((data) => {
-  if (data && data.coupon) {
-    const bookingDetails = getBookingDetails()
-    const ourBusPrices = extractPricesFromPage()
-
-    fetchYourTripPalPrices(bookingDetails).then((yourTripPalPrices) => {
-      const comparisonResults = comparePrices(ourBusPrices, yourTripPalPrices)
-      if (comparisonResults.length > 0) {
-        showPopup(comparisonResults, data.coupon.code)
+    if (ourBusPrice && couponData && couponData.coupon) {
+      const yourTripPalPrice = await fetchYourTripPalPrices(bookingDetails);
+      if (yourTripPalPrice) {
+        const comparisonResults = comparePrices(ourBusPrice, yourTripPalPrice);
+        showPopup(comparisonResults, couponData.coupon.code);
+      } else {
+        console.error('Failed to fetch YourTripPal price.');
       }
-    })
-  } else {
-    console.error('No coupon data available or API call failed.')
+    } else {
+      console.error('No coupon data available or API call failed.');
+    }
+  } catch (error) {
+    console.error('Failed to process data:', error);
   }
-})
-
-// Function to fetch data from the API
-function fetchData() {
-  return fetch(apiUrl)
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-      return response.json()
-    })
-    .then((data) => {
-      return data
-    })
-    .catch((error) => {
-      console.error('Failed to fetch data:', error)
-      return null
-    })
-}
+})();
