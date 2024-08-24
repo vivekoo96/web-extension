@@ -1,6 +1,6 @@
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url) {
-    const busBookingWebsites = ['ourbus.com/booknow', 'wanderu.com']
+    const busBookingWebsites = ['ourbus.com/booknow', 'coachrun.com/bus/search','shop.flixbus.com/search']
     const url = new URL(tab.url)
 
     if (busBookingWebsites.some((site) => url.hostname.includes(site))) {

@@ -9,7 +9,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.ourbus.com/booknow*", "*://*.wanderu.com/*"],
+      "matches": ["*://*.ourbus.com/booknow*", "*://*.coachrun.com/bus/search*","*://shop.flixbus.com/search*"],
       "js": ["content.js"]
     }
   ],
